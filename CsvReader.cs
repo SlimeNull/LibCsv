@@ -1,4 +1,5 @@
-﻿using System;
+﻿using LibCsv.Attributes;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
@@ -12,15 +13,36 @@ namespace LibCsv
 {
     public class CsvReader<TModel> : IDisposable
     {
-        static readonly Type ModelType = typeof(TModel);
-        static readonly PropertyInfo[] ModelProperties = ModelType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.GetProperty | BindingFlags.SetProperty);
+        static readonly Type s_modelType = typeof(TModel);
+        static readonly Dictionary<string, PropertyInfo> s_modelHeaderToProperty;
+
+        static CsvReader()
+        {
+            s_modelType = typeof(TModel);
+            s_modelHeaderToProperty = new Dictionary<string, PropertyInfo>();
+
+            var properties = s_modelType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.GetProperty | BindingFlags.SetProperty);
+            for (int i = 0; i < properties.Length; i++)
+            {
+                var property = properties[i];
+
+                if (property.GetCustomAttribute<HeaderAttribute>() is HeaderAttribute headerAttribute)
+                {
+                    s_modelHeaderToProperty[headerAttribute.Name ?? property.Name] = property;
+                }
+                else
+                {
+                    s_modelHeaderToProperty[property.Name] = property;
+                }
+            }
+        }
 
         public CsvReader(TextReader reader)
         {
             BaseStream = null;
 
-            textReader = reader;
-            closeBaseStreamWhileDisposing = false;
+            _textReader = reader;
+            _closeBaseStreamWhileDisposing = false;
 
             EnsureModelTypeOK();
         }
@@ -29,8 +51,8 @@ namespace LibCsv
         {
             BaseStream = stream;
 
-            textReader = new StreamReader(stream);
-            closeBaseStreamWhileDisposing = false;
+            _textReader = new StreamReader(stream);
+            _closeBaseStreamWhileDisposing = false;
 
             EnsureModelTypeOK();
         }
@@ -39,8 +61,8 @@ namespace LibCsv
         {
             BaseStream = File.OpenRead(file);
 
-            textReader = new StreamReader(BaseStream);
-            closeBaseStreamWhileDisposing = true;
+            _textReader = new StreamReader(BaseStream);
+            _closeBaseStreamWhileDisposing = true;
 
             EnsureModelTypeOK();
         }
@@ -50,14 +72,14 @@ namespace LibCsv
             Dispose(false);
         }
 
-        private TModel? current;
-        private bool closeBaseStreamWhileDisposing;
-        private string[]? header;
-        private TextReader textReader;
+        private TModel? _current;
+        private bool _closeBaseStreamWhileDisposing;
+        private string[]? _headers;
+        private TextReader _textReader;
 
         public Stream? BaseStream { get; }
 
-        public TModel Current => current ?? throw new InvalidOperationException("No data");
+        public TModel Current => _current ?? throw new InvalidOperationException("No data");
 
         private void EnsureModelTypeOK()
         {
@@ -75,7 +97,7 @@ namespace LibCsv
 
         private string[]? ReadRow()
         {
-            string? line = textReader.ReadLine();
+            string? line = _textReader.ReadLine();
             if (line == null)
                 return null;
 
@@ -84,13 +106,13 @@ namespace LibCsv
 
         public bool Read()
         {
-            if (header == null)
+            if (_headers == null)
             {
                 string[]? header = ReadRow();
                 if (header == null)
                     return false;
 
-                this.header = header;
+                this._headers = header;
             }
 
             string[]? row = ReadRow();
@@ -98,9 +120,9 @@ namespace LibCsv
                 return false;
 
             TModel model = Activator.CreateInstance<TModel>();
-            MapRowToModel(header, row, model);
+            MapRowToModel(_headers, row, model);
 
-            current = model;
+            _current = model;
             return true;
         }
 
@@ -124,7 +146,7 @@ namespace LibCsv
             if (disposing)
                 GC.SuppressFinalize(this);
 
-            if (closeBaseStreamWhileDisposing)
+            if (_closeBaseStreamWhileDisposing)
                 BaseStream?.Dispose();
         }
 
@@ -251,12 +273,10 @@ namespace LibCsv
                     break;
 
                 string header = headers[i];
-                PropertyInfo? prop = modelType.GetProperty(header);
-
-                if (prop == null)
+                if (!s_modelHeaderToProperty.TryGetValue(header, out var prop) &&
+                    !s_modelHeaderToProperty.TryGetValue(ToPascal(header), out prop))
                 {
-                    string pascalHeader = ToPascal(header);
-                    prop = modelType.GetProperty(pascalHeader);
+                    continue;
                 }
 
                 if (prop == null)

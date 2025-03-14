@@ -1,4 +1,5 @@
-﻿using System;
+﻿using LibCsv.Attributes;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -9,31 +10,53 @@ namespace LibCsv
 {
     public class CsvWriter<TModel> : IDisposable
     {
-        static readonly Type ModelType = typeof(TModel);
-        static readonly PropertyInfo[] ModelProperties = ModelType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.GetProperty | BindingFlags.SetProperty);
+        static readonly Type s_modelType;
+        static readonly PropertyInfo[] s_modelProperties;
+        static readonly string[] s_modelHeaderNames;
+
+        static CsvWriter()
+        {
+            s_modelType = typeof(TModel);
+            s_modelProperties = s_modelType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.GetProperty | BindingFlags.SetProperty);
+
+            s_modelHeaderNames = new string[s_modelProperties.Length];
+            for (int i = 0; i < s_modelProperties.Length; i++)
+            {
+                var property = s_modelProperties[i];
+
+                if (property.GetCustomAttribute<HeaderAttribute>() is HeaderAttribute headerAttribute)
+                {
+                    s_modelHeaderNames[i] = headerAttribute.Name ?? property.Name;
+                }
+                else
+                {
+                    s_modelHeaderNames[i] = property.Name;
+                }
+            }
+        }
 
         public CsvWriter(TextWriter writer)
         {
             BaseStream = null;
 
-            textWriter = writer;
-            closeBaseStreamWhileDisposing = false;
+            _textWriter = writer;
+            _closeBaseStreamWhileDisposing = false;
         }
 
         public CsvWriter(Stream stream)
         {
             BaseStream = stream;
 
-            textWriter = new StreamWriter(stream);
-            closeBaseStreamWhileDisposing = false;
+            _textWriter = new StreamWriter(stream);
+            _closeBaseStreamWhileDisposing = false;
         }
 
         public CsvWriter(string filename)
         {
             BaseStream = File.Create(filename);
 
-            textWriter = new StreamWriter(BaseStream);
-            closeBaseStreamWhileDisposing = true;
+            _textWriter = new StreamWriter(BaseStream);
+            _closeBaseStreamWhileDisposing = true;
         }
 
         ~CsvWriter()
@@ -41,9 +64,9 @@ namespace LibCsv
             Dispose(false);
         }
 
-        private readonly TextWriter textWriter;
-        private readonly bool closeBaseStreamWhileDisposing;
-        private bool headerWrote = false;
+        private readonly TextWriter _textWriter;
+        private readonly bool _closeBaseStreamWhileDisposing;
+        private bool _headerWrote = false;
 
         public Stream? BaseStream { get; }
 
@@ -52,10 +75,10 @@ namespace LibCsv
 
         private void WriteHeader()
         {
-            string headerLine = string.Join(",", ModelProperties.Select(p => p.Name));
-            textWriter.WriteLine(headerLine);
+            string headerLine = string.Join(",", s_modelHeaderNames.Select(name => ToCsvCell(name)));
+            _textWriter.WriteLine(headerLine);
 
-            headerWrote = true;
+            _headerWrote = true;
         }
 
         private string ToCsvCell(string? value)
@@ -93,12 +116,12 @@ namespace LibCsv
 
         public void Write(TModel value)
         {
-            if (!headerWrote)
+            if (!_headerWrote)
                 WriteHeader();
 
-            string dataLine = string.Join(",", ModelProperties.Select(p => ToCsvCell(p.GetValue(value)?.ToString())));
+            string dataLine = string.Join(",", s_modelProperties.Select(p => ToCsvCell(p.GetValue(value)?.ToString())));
 
-            textWriter.WriteLine(dataLine);
+            _textWriter.WriteLine(dataLine);
         }
 
         public void Close()
@@ -121,7 +144,7 @@ namespace LibCsv
             if (disposing)
                 GC.SuppressFinalize(this);
 
-            if (closeBaseStreamWhileDisposing)
+            if (_closeBaseStreamWhileDisposing)
                 BaseStream?.Dispose();
         }
     }
